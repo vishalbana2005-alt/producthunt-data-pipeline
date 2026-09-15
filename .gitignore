@@ -1,0 +1,13 @@
+.env
+venv/
+dbt_venv/
+dbt_profiles/
+airflow/logs/
+airflow/.env
+__pycache__/
+*.pyc
+.DS_Store
+producthunt_dbt/target/
+producthunt_dbt/logs/
+producthunt_dbt/dbt_packages/
+logs/

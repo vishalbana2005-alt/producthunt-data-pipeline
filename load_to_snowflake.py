@@ -1,19 +1,13 @@
-import os
 import json
+import os
+
 import requests
 import snowflake.connector
 from dotenv import load_dotenv
 
-load_dotenv()
+API_URL = "https://api.producthunt.com/v2/api/graphql"
 
-# --- Step 1: Get data from Product Hunt ---
-token = os.getenv("PH_DEVELOPER_TOKEN")
-url = "https://api.producthunt.com/v2/api/graphql"
-headers = {
-    "Authorization": f"Bearer {token}",
-    "Content-Type": "application/json"
-}
-query = """
+QUERY = """
 {
   posts(first: 5) {
     edges {
@@ -27,34 +21,79 @@ query = """
   }
 }
 """
-response = requests.post(url, json={"query": query}, headers=headers)
-data = response.json()
 
-# --- Step 2: Connect to Snowflake ---
-conn = snowflake.connector.connect(
-    account=os.getenv("SNOWFLAKE_ACCOUNT"),
-    user=os.getenv("SNOWFLAKE_USER"),
-    password=os.getenv("SNOWFLAKE_PASSWORD"),
-    warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-    database=os.getenv("SNOWFLAKE_DATABASE"),
-    schema=os.getenv("SNOWFLAKE_SCHEMA"),
-)
-cursor = conn.cursor()
 
-# --- Step 3: Create a raw landing table (if it doesn't exist) ---
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS RAW_PRODUCTHUNT_POSTS (
-    raw_json VARIANT,
-    loaded_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
-)
-""")
+def required_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
 
-# --- Step 4: Insert the raw JSON response ---
-cursor.execute(
-    "INSERT INTO RAW_PRODUCTHUNT_POSTS (raw_json) SELECT PARSE_JSON(%s)",
-    (json.dumps(data),)
-)
-print("Data loaded successfully into Snowflake.")
 
-cursor.close()
-conn.close()
+def fetch_producthunt_posts():
+    response = requests.post(
+        API_URL,
+        json={"query": QUERY},
+        headers={
+            "Authorization": f"Bearer {required_env('PH_DEVELOPER_TOKEN')}",
+            "Content-Type": "application/json",
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    data = response.json()
+
+    if data.get("errors"):
+        raise RuntimeError(f"Product Hunt GraphQL error: {data['errors']}")
+
+    edges = data.get("data", {}).get("posts", {}).get("edges")
+    if not isinstance(edges, list):
+        raise RuntimeError("Unexpected Product Hunt response structure.")
+
+    return data, len(edges)
+
+
+def main():
+    load_dotenv()
+
+    data, post_count = fetch_producthunt_posts()
+    print(f"Retrieved {post_count} Product Hunt posts.")
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = snowflake.connector.connect(
+            account=required_env("SNOWFLAKE_ACCOUNT"),
+            user=required_env("SNOWFLAKE_USER"),
+            password=required_env("SNOWFLAKE_PASSWORD"),
+            warehouse=required_env("SNOWFLAKE_WAREHOUSE"),
+            database=required_env("SNOWFLAKE_DATABASE"),
+            schema=required_env("SNOWFLAKE_SCHEMA"),
+        )
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS RAW_PRODUCTHUNT_POSTS (
+                raw_json VARIANT,
+                loaded_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+            )
+        """)
+
+        cursor.execute(
+            "INSERT INTO RAW_PRODUCTHUNT_POSTS (raw_json) SELECT PARSE_JSON(%s)",
+            (json.dumps(data),),
+        )
+
+        print(f"Loaded {post_count} posts into Snowflake.")
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+if __name__ == "__main__":
+    main()

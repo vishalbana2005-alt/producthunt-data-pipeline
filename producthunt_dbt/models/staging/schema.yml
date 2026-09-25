@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: stg_producthunt_posts
+    description: "Cleaned, flattened Product Hunt posts extracted from raw JSON."
+    columns:
+      - name: product_name
+        description: "Name of the product."
+        tests:
+          - not_null
+      - name: tagline
+        description: "Short description of the product."
+        tests:
+          - not_null
+      - name: votes_count
+        description: "Number of upvotes at time of ingestion."
+        tests:
+          - not_null
+      - name: created_at
+        description: "Timestamp the product was posted on Product Hunt."
+        tests:
+          - not_null
